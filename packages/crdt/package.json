@@ -1,0 +1,42 @@
+{
+  "name": "@tandem/crdt",
+  "version": "0.1.0",
+  "description": "From-scratch CRDTs for Tandem: Fugue text, LWW map, and a movable tree, with binary encoding.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "bench": "pnpm build && node bench/run.mjs"
+  },
+  "devDependencies": {
+    "@automerge/automerge": "3.5.0",
+    "@types/node": "^24.19.2",
+    "fast-check": "4.10.2",
+    "tsup": "8.5.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7",
+    "yjs": "13.6.33"
+  }
+}

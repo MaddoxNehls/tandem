@@ -1,0 +1,59 @@
+{
+  "tandem": {
+    "lib": "tandem",
+    "edits": 259778,
+    "applyMs": 194.07140000000004,
+    "opsPerSec": 1338569.2070031955,
+    "memoryBytes": 6780688,
+    "encodedBytes": 257843,
+    "saveMs": 7.200199999999995,
+    "loadMs": 35.03780000000006,
+    "extra": {
+      "ops": 10160,
+      "spans": 12502,
+      "btreeDepth": 3,
+      "rawLength": 182315,
+      "treeLog": 0,
+      "remoteOps": 259778,
+      "remoteMs": 242.2342,
+      "keystrokeBytes": 37
+    },
+    "runs": 5
+  },
+  "yjs": {
+    "lib": "yjs",
+    "edits": 259778,
+    "applyMs": 1629.0204999999999,
+    "opsPerSec": 159468.8341859418,
+    "memoryBytes": 3980173,
+    "encodedBytes": 311038,
+    "saveMs": 8.035199999999804,
+    "loadMs": 16.217599999999948,
+    "extra": {},
+    "runs": 5
+  },
+  "automerge-1change": {
+    "lib": "automerge-1change",
+    "edits": 259778,
+    "applyMs": 6849.566000000001,
+    "opsPerSec": 37926.198535790434,
+    "memoryBytes": 108906589,
+    "encodedBytes": 129103,
+    "saveMs": 10.096700000000055,
+    "loadMs": 153.15609999999924,
+    "extra": {},
+    "runs": 5
+  },
+  "automerge": {
+    "lib": "automerge",
+    "edits": 259778,
+    "applyMs": 17446.1679,
+    "opsPerSec": 14890.26137367393,
+    "memoryBytes": 57511045,
+    "encodedBytes": 129222,
+    "saveMs": 24.478000000002794,
+    "loadMs": 1063.7821000000004,
+    "extra": {},
+    "runs": 1
+  }
+}
