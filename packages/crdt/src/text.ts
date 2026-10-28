@@ -15,13 +15,15 @@
  *
  * A remote insert is placed between its origins; when other items already
  * sit between them (i.e. they were inserted concurrently), `integrate`
- * decides the order deterministically. The rule implemented here is the
- * list-based form of FugueMax (Gentle's "YjsMod"), which Weidner, Gentle and
- * Kleppmann prove equivalent to the tree-based FugueMax algorithm in
- * "The Art of the Fugue". Its key property is *maximal non-interleaving*:
- * two users typing concurrently at the same spot end up with their runs
- * side by side, never shuffled character-by-character, whether they type
- * forwards or backwards.
+ * decides the order deterministically. The rule implemented here is
+ * Gentle's list-based "YjsMod" integration. Weidner & Kleppmann ("The Art
+ * of the Fugue", arXiv:2305.00583, sections 3.1 and 8) *conjecture* that
+ * YjsMod is semantically equivalent to their tree-based FugueMax, which they
+ * prove maximally non-interleaving: two users typing concurrently at the same
+ * spot end up with their runs side by side, never shuffled
+ * character-by-character, whether they type forwards or backwards. We check
+ * that conjecture for this implementation with a differential test against a
+ * paper-faithful FugueMax (test/fuguemax.differential.test.ts).
  *
  * ## Representation
  * Consecutive characters typed by one agent with consecutive seqs (where
@@ -382,6 +384,37 @@ export class FugueText {
         rem -= n;
       }
     }
+  }
+
+  /** Whether every char (agent, seq) .. (agent, seq + len - 1) exists here. */
+  hasRange(agent: number, seq: number, len: number): boolean {
+    const runs = this.runs[agent];
+    if (!runs) return false;
+    while (len > 0) {
+      const r = runs[upperBound(runs, seq) - 1];
+      if (!r || seq >= r.seq + r.len) return false;
+      const n = Math.min(len, r.seq + r.len - seq);
+      seq += n;
+      len -= n;
+    }
+    return true;
+  }
+
+  /** Id of the visible char at `pos` (0 <= pos < length). */
+  idAtVisible(pos: number): { agent: number; seq: number } {
+    const loc = this.locateVisible(pos);
+    const s = loc.leaf.items[loc.idx]!;
+    return { agent: s.agent, seq: s.seq + loc.offset };
+  }
+
+  /**
+   * Visible position just after char (agent, seq); if that char has been
+   * deleted, the position where it used to be.
+   */
+  visibleOffsetAfter(agent: number, seq: number): number {
+    const s = this.findSpan(agent, seq);
+    const base = this.visIndexOf(s);
+    return s.deleted ? base : base + (seq - s.seq) + 1;
   }
 
   // ---------------------------------------------------------------------------

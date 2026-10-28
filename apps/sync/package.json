@@ -1,0 +1,29 @@
+{
+  "name": "@tandem/sync-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --conditions=source src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tandem/crdt": "workspace:*",
+    "@tandem/sync": "workspace:*",
+    "pg": "8.23.1",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/ws": "8.18.2",
+    "tsup": "8.5.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "3.2.7"
+  }
+}

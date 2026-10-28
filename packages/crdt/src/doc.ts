@@ -25,6 +25,7 @@ import { LWWMap, type JsonValue } from './map.js';
 import {
   opSpan,
   trimOp,
+  validateOp,
   type DeleteOp,
   type DeleteRange,
   type Id,
@@ -37,6 +38,17 @@ import {
 import { FugueText, NONE, type TextPatch } from './text.js';
 import { appendFlattening } from './strings.js';
 import { MoveTree, ROOT, TRASH } from './tree.js';
+
+/** Thrown by `applyRemote` for an op that can never be applied. */
+export class InvalidOpError extends Error {
+  override name = 'InvalidOpError';
+}
+
+/**
+ * A position that survives concurrent edits: the id of the character to the
+ * left of the cursor, or null for the start of the document.
+ */
+export type CursorRef = Id | null;
 
 export interface DocOptions {
   /** Globally unique replica id. Defaults to a random id. */
@@ -176,6 +188,27 @@ export class Doc {
     this.commitLocal(op, { text: [{ type: 'delete', pos, len }] });
   }
 
+  /** Stable reference for cursor position `pos` (0..length). */
+  cursorAt(pos: number): CursorRef {
+    if (!Number.isInteger(pos) || pos < 0 || pos > this.length) {
+      throw new RangeError(`cursor position ${pos} out of range [0, ${this.length}]`);
+    }
+    if (pos === 0) return null;
+    const id = this.textCrdt.idAtVisible(pos - 1);
+    return { agent: this.agentNames[id.agent]!, seq: id.seq };
+  }
+
+  /**
+   * Current position of a cursor reference, or null if it refers to a
+   * character this replica has not received yet.
+   */
+  resolveCursor(ref: CursorRef): number | null {
+    if (ref === null) return 0;
+    const a = this.agentIdx.get(ref.agent);
+    if (a === undefined || !this.textCrdt.hasRange(a, ref.seq, 1)) return null;
+    return this.textCrdt.visibleOffsetAfter(a, ref.seq);
+  }
+
   /** Visible character ids in order, as "agent:seq" strings (debug/testing). */
   visibleIds(): string[] {
     return this.textCrdt.visibleIds();
@@ -289,6 +322,11 @@ export class Doc {
    * buffered until they can be applied).
    */
   applyRemote(ops: readonly Op[]): ApplyResult {
+    // Reject a malformed batch up front, before anything is applied.
+    for (const op of ops) {
+      const err = validateOp(op);
+      if (err) throw new InvalidOpError(`invalid op: ${err}`);
+    }
     const event: ChangeEvent | null =
       this.listeners.size > 0
         ? { origin: 'remote', ops: [], text: [], meta: [], tree: false }
@@ -296,19 +334,24 @@ export class Doc {
     let applied = 0;
     let duplicates = 0;
     const queue: Op[] = ops.slice();
-    for (let qi = 0; qi < queue.length; qi++) {
-      const op = queue[qi]!;
-      const res = this.tryApply(op, event);
-      if (res === APPLIED) {
-        applied++;
-        this.wake(this.agentIdx.get(op.agent)!, queue);
-      } else if (res === DUPLICATE) {
-        duplicates++;
-      } else {
-        this.block(op, res);
+    try {
+      for (let qi = 0; qi < queue.length; qi++) {
+        const op = queue[qi]!;
+        // Each op is atomic: an InvalidOpError (an op referencing ids that
+        // are not characters) leaves earlier ops applied and this one not.
+        const res = this.tryApply(op, event);
+        if (res === APPLIED) {
+          applied++;
+          this.wake(this.agentIdx.get(op.agent)!, queue);
+        } else if (res === DUPLICATE) {
+          duplicates++;
+        } else {
+          this.block(op, res);
+        }
       }
+    } finally {
+      if (event && applied > 0) this.emit(event);
     }
-    if (event && applied > 0) this.emit(event);
     return { applied, duplicates, pending: this.pendingCount };
   }
 
@@ -419,7 +462,6 @@ export class Doc {
     const a = this.intern(input.agent);
     const have = this.vv[a]!;
     const span = opSpan(input);
-    if (span === 0) throw new TypeError('malformed op: empty insert or delete');
     if (have >= input.seq + span) return DUPLICATE;
     if (have < input.seq) return { agent: a, seq: input.seq - 1 };
     const op = have > input.seq ? trimOp(input, have - input.seq) : input;
@@ -427,6 +469,7 @@ export class Doc {
 
     const missing = this.missingDependency(op);
     if (missing) return missing;
+    this.assertReferencesExist(op);
 
     switch (op.kind) {
       case 'ins': {
@@ -492,6 +535,30 @@ export class Doc {
       }
     }
     return null;
+  }
+
+  /**
+   * Every referenced id is covered by the version vector, but it must also
+   * be a *character*: an id that belongs to a map or tree op would make the
+   * text CRDT fail half-way through. Checked before any state changes.
+   */
+  private assertReferencesExist(op: Op): void {
+    const ok = (agent: string, seq: number, len: number): boolean =>
+      this.textCrdt.hasRange(this.intern(agent), seq, len);
+    if (op.kind === 'ins') {
+      if (op.originLeft && !ok(op.originLeft.agent, op.originLeft.seq, 1)) {
+        throw new InvalidOpError(`insert ${op.agent}:${op.seq} has a non-character originLeft`);
+      }
+      if (op.originRight && !ok(op.originRight.agent, op.originRight.seq, 1)) {
+        throw new InvalidOpError(`insert ${op.agent}:${op.seq} has a non-character originRight`);
+      }
+    } else if (op.kind === 'del') {
+      for (const t of op.targets) {
+        if (!ok(t.agent, t.seq, t.len)) {
+          throw new InvalidOpError(`delete ${op.agent}:${op.seq} targets non-character ids`);
+        }
+      }
+    }
   }
 
   private block(op: Op, missing: Missing): void {

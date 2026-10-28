@@ -1,0 +1,22 @@
+# Postgres for the Tandem sync server. Host port 5448 (5432-5447 are taken
+# on the development machine).
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: tandem-postgres
+    environment:
+      POSTGRES_USER: tandem
+      POSTGRES_PASSWORD: tandem
+      POSTGRES_DB: tandem
+    ports:
+      - "5448:5432"
+    volumes:
+      - tandem-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tandem -d tandem"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  tandem-pg:

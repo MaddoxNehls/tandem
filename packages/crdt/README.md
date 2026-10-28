@@ -9,7 +9,7 @@ One `Doc` is one replica of a note. It contains:
 
 | Part | CRDT | Used for |
 |---|---|---|
-| Text | **Fugue** (FugueMax semantics), run-length encoded, B-tree indexed | the note body |
+| Text | **Fugue family** (YjsMod integration, conjectured equivalent to FugueMax; non-interleaving property-tested), run-length encoded, B-tree indexed | the note body |
 | Map | **LWW register per key** (Lamport timestamp + agent-id tiebreak) | note metadata: title, icon, tags |
 | Tree | **Movable tree** (Kleppmann et al. 2021; undo/do/redo over a move log) | page hierarchy |
 
@@ -68,8 +68,13 @@ class Doc {
   // Sync
   version(): VersionVector                          // { [agent]: number of seqs seen }
   getOps(since?: VersionVector): Op[]               // what a peer at `since` is missing, causal order
-  applyRemote(ops: readonly Op[]): ApplyResult      // any order, duplicates OK; buffers ops until deps arrive
+  applyRemote(ops: readonly Op[]): ApplyResult      // any order, duplicates OK; buffers ops until deps arrive;
+                                                    // throws InvalidOpError on malformed input (see below)
   get pending(): number                             // ops buffered waiting for dependencies
+
+  // Stable cursors (for presence): survive concurrent edits
+  cursorAt(pos: number): CursorRef                  // id of the char left of pos, or null at the start
+  resolveCursor(ref: CursorRef): number | null      // current position; null if that char hasn't arrived yet
 
   // Persistence
   save(): Uint8Array                                // full snapshot (complete history)
@@ -81,6 +86,7 @@ class Doc {
 
 encodeOps(ops: Op[], { snapshot? }): Uint8Array      // binary sync message
 decodeOps(bytes: Uint8Array): Op[]
+validateOp(op: unknown): string | null              // structural check for untrusted input (LIMITS)
 
 interface ChangeEvent {
   origin: 'local' | 'remote'
@@ -133,12 +139,15 @@ RGA orders siblings of the same left neighbour by timestamp, newest first,
 so each new char competes with the other user's chars:   "axbycz"
 ```
 
-Weidner, Gentle and Kleppmann ("The Art of the Fugue: Minimizing Interleaving
-in Collaborative Text Editing", 2023) define **maximal non-interleaving** and
-give **Fugue**, the first sequence CRDT proven to satisfy it: concurrent runs
-inserted at the same place are never interleaved, whether typed forwards or
-backwards. That is the guarantee Tandem wants for a notes app where offline
-edits are the normal case, which is why it uses Fugue rather than RGA.
+Weidner and Kleppmann ("The Art of the Fugue: Minimizing Interleaving in
+Collaborative Text Editing", arXiv:2305.00583; v1 in 2023 also listed Joseph
+Gentle as an author) define **maximal non-interleaving** and give two
+algorithms. **Fugue** is proven forward non-interleaving, and **FugueMax**, a
+small variant, is proven maximally non-interleaving: concurrent runs inserted
+at the same place are never interleaved, whether typed forwards or backwards,
+except in situations where the paper shows any algorithm must interleave.
+Tandem wants that guarantee for a notes app where offline edits are the normal
+case, which is why it targets FugueMax rather than RGA.
 
 ### How the algorithm works
 
@@ -174,9 +183,28 @@ for each item `o` between originLeft (L) and originRight (R), left to right:
 ```
 
 This list-based integration is Gentle's "YjsMod" algorithm (from
-`josephg/reference-crdts`, also used in Diamond Types); the Fugue paper shows
-it produces the same order as tree-based FugueMax. The test suite does not
-rely on that claim: it checks non-interleaving directly (section 6).
+`josephg/reference-crdts`). It is *not proven* equivalent to FugueMax. The
+paper only conjectures it (section 3.1, and again in section 8):
+
+> "We conjecture that Sync9 is semantically equivalent to Fugue, while YjsMod
+> is semantically equivalent to FugueMax. If that is indeed the case, then
+> Sync9 and YjsMod satisfy forward and backward non-interleaving."
+
+FugueMax itself borrows YjsMod's key idea (section 5.3): *"We learned of this
+reverse-right-origin technique from Gentle's YjsMod."* That technique orders
+right-side siblings by the reverse list order of their right origins.
+
+Tandem therefore tests the conjecture for its own implementation instead of
+assuming it. `test/fuguemax-oracle.ts` is a naive, paper-faithful FugueMax
+(Algorithm 1 plus Definition 6, an explicit tree, one node per character).
+`test/fuguemax.differential.test.ts` runs the same random multi-replica
+editing and syncing script on both. After **every step** of 1,000 random runs,
+the visible character ids are identical on every replica. As a control,
+swapping the oracle to plain Fugue (right siblings ordered by id only) makes
+the test fail within about 30 runs, so it does tell the two algorithms apart.
+The paper's Figure 7/8 execution, the case where Fugue and FugueMax differ,
+is also a unit test, and it produces the order the paper requires: `AXYBC`.
+This is strong evidence, not a proof.
 
 Why backwards typing does not interleave here, step by step:
 
@@ -380,7 +408,7 @@ agent-id table.
 
 ## 6. Testing
 
-`pnpm test` runs 40 tests: unit tests for the edge cases plus fast-check
+`pnpm test` runs 45 tests: unit tests for the edge cases plus fast-check
 property tests. The run counts are in the test names.
 
 **Network simulator** (`test/helpers.ts`): N replicas (2-5). Messages are
@@ -399,6 +427,7 @@ anti-entropy runs.
 | **Map / tree = sequential reference** | the final meta equals "max timestamp per key", and the final tree equals "apply moves in timestamp order, skipping cycles" |
 | **Idempotence** | re-applying all ops, reversed, plus random subsets: no change, all counted as duplicates (300 runs) |
 | **Commutativity** | two random one-op-at-a-time delivery orders give identical states (300 runs) |
+| **Agrees with FugueMax** | differential test against a paper-faithful tree implementation; identical char order after every step (1,000 runs) |
 | **No interleaving (Fugue)** | 2-5 users concurrently type random runs at the same position, each forwards or backwards, delivered one op at a time in random order: every run is contiguous and in order (500 runs) |
 | **Tree: no cycles, convergence** | random concurrent moves, acyclicity asserted after *every* op application on every replica (400 runs) |
 | **Encoding round-trip** | random concurrent edits with arbitrary code points (200 runs); snapshots reload to identical char ids |
@@ -474,17 +503,26 @@ Reading the results honestly:
 * **Snapshots are full histories.** Loading replays them, which takes about
   30 ms for this trace. A state-only snapshot, with lazily loaded history for
   version browsing, would cut both load time and size.
-* **Plain text only.** Rich-text marks (bold, links) and block structure are
-  milestone 2, together with the editor binding.
-* Remote ops are trusted to be well-formed (ids are dense, origins exist).
-  The sync server should validate ops from untrusted clients.
+* **Plain text only.** The editor (apps/web) expresses block structure as
+  markdown-ish line prefixes. Inline marks (bold, links) are planned as a
+  Peritext-style mark CRDT anchored to character ids.
+* **Untrusted input** is validated in two stages. `validateOp` checks types,
+  bounds (counters below 2^48, sizes) and self-references for the whole
+  batch, and `applyRemote` rejects the batch before applying anything if any
+  op fails. At apply time, an op whose referenced ids exist but are not
+  characters (for example a delete aimed at a map op's id) throws
+  `InvalidOpError` *before* it mutates anything. Earlier ops in the batch
+  stay applied, since each op is atomic. Ops waiting on ids that never
+  arrive stay buffered, so a server should cap `pending` (the sync server
+  does).
 * Only the automerge-paper trace (crdt-benchmarks B4) is benchmarked so far,
   not the full B1-B3 microbenchmark suite.
 
 ## References
 
-* M. Weidner, J. Gentle, M. Kleppmann. *The Art of the Fugue: Minimizing
-  Interleaving in Collaborative Text Editing.* arXiv:2305.00583, 2023.
+* M. Weidner, M. Kleppmann. *The Art of the Fugue: Minimizing Interleaving
+  in Collaborative Text Editing.* arXiv:2305.00583v3, 2025 (v1, 2023, with
+  J. Gentle). Sections 3.1 and 8 (the YjsMod conjecture), 5.3 (FugueMax).
 * M. Kleppmann, V. B. F. Gomes, D. P. Mulligan, A. R. Beresford.
   *Interleaving anomalies in collaborative text editors.* PaPoC 2019.
 * M. Kleppmann, D. P. Mulligan, V. B. F. Gomes, A. R. Beresford. *A

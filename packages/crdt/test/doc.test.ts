@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Doc, type ChangeEvent, type InsertOp, type Op, type TextPatch } from '../src/index.js';
+import { Doc, InvalidOpError, validateOp, type ChangeEvent, type InsertOp, type Op, type TextPatch } from '../src/index.js';
 
 function applyPatch(s: string, p: TextPatch): string {
   return p.type === 'insert'
@@ -171,10 +171,87 @@ describe('doc: causality, buffering, sync', () => {
     expect(other.text).toBe('> note body');
   });
 
-  it('rejects malformed input', () => {
+  it('rejects a malformed batch before applying anything', () => {
     const d = new Doc({ agent: 'a' });
     const bad: Op = { kind: 'ins', agent: 'x', seq: 0, lamport: 0, originLeft: null, originRight: null, content: '' };
-    expect(() => d.applyRemote([bad])).toThrow(TypeError);
+    expect(() => d.applyRemote([bad])).toThrow(InvalidOpError);
     expect(() => new Doc({ agent: '' })).toThrow(TypeError);
+
+    const good = new Doc({ agent: 'g' });
+    good.insert(0, 'ok');
+    const batch: Op[] = [...good.getOps(), { ...bad, content: 'x', seq: -1 }];
+    expect(() => d.applyRemote(batch)).toThrow(InvalidOpError);
+    expect(d.text).toBe(''); // the valid op in the batch was not applied either
+  });
+
+  it('rejects ops that reference non-character ids, without partial effects', () => {
+    const a = new Doc({ agent: 'a' });
+    a.setMeta('k', 1); // a:0 is a map op, not a character
+    const d = new Doc({ agent: 'd' });
+    d.applyRemote(a.getOps());
+    const forgedDel: Op = { kind: 'del', agent: 'm', seq: 0, lamport: 5, targets: [{ agent: 'a', seq: 0, len: 1 }] };
+    expect(() => d.applyRemote([forgedDel])).toThrow(InvalidOpError);
+    expect(d.version()).toEqual({ a: 1 });
+    const forgedIns: Op = {
+      kind: 'ins',
+      agent: 'm',
+      seq: 0,
+      lamport: 5,
+      originLeft: { agent: 'a', seq: 0 },
+      originRight: null,
+      content: 'x',
+    };
+    expect(() => d.applyRemote([forgedIns])).toThrow(InvalidOpError);
+    expect(d.text).toBe('');
+    expect(d.version()).toEqual({ a: 1 });
+  });
+
+  it('validateOp enforces shapes and bounds', () => {
+    const ok: Op = {
+      kind: 'ins',
+      agent: 'a',
+      seq: 3,
+      lamport: 3,
+      originLeft: { agent: 'a', seq: 2 },
+      originRight: null,
+      content: 'x',
+    };
+    expect(validateOp(ok)).toBeNull();
+    expect(validateOp({ ...ok, originLeft: { agent: 'a', seq: 3 } })).toMatch(/itself/);
+    expect(validateOp({ ...ok, seq: 1.5 })).toBe('bad seq');
+    expect(validateOp({ ...ok, lamport: 2 ** 60 })).toBe('bad lamport');
+    expect(validateOp({ ...ok, agent: 'x'.repeat(65) })).toBe('bad agent');
+    expect(validateOp({ ...ok, kind: 'nope' })).toBe('unknown op kind');
+    expect(validateOp({ kind: 'del', agent: 'a', seq: 1, lamport: 1, targets: [{ agent: 'a', seq: 0, len: 0 }] })).toBe(
+      'bad delete target',
+    );
+    expect(validateOp({ kind: 'del', agent: 'a', seq: 1, lamport: 1, targets: [{ agent: 'a', seq: 0, len: 2 }] })).toMatch(
+      /itself/,
+    );
+    expect(validateOp({ kind: 'move', agent: 'a', seq: 0, lamport: 0, node: '', parent: 'root' })).toBe('bad tree node id');
+    expect(validateOp({ kind: 'set', agent: 'a', seq: 0, lamport: 0, key: 'k', value: 'x'.repeat(70_000) })).toBe('bad value');
+    expect(validateOp(null)).toBe('op must be an object');
+  });
+
+  it('cursor refs track a character through concurrent edits', () => {
+    const c = new Doc({ agent: 'c' });
+    c.insert(0, 'abc');
+    expect(c.cursorAt(0)).toBeNull();
+    const afterB = c.cursorAt(2); // between "b" and "c"
+    expect(afterB).toEqual({ agent: 'c', seq: 1 });
+
+    const other = new Doc({ agent: 'o' });
+    other.applyRemote(c.getOps());
+    other.insert(0, 'XY');
+    c.applyRemote(other.getOps(c.version()));
+    expect(c.text).toBe('XYabc');
+    expect(c.resolveCursor(afterB)).toBe(4);
+
+    c.delete(3, 1); // delete "b": the cursor stays where "b" was
+    expect(c.text).toBe('XYac');
+    expect(c.resolveCursor(afterB)).toBe(3);
+    expect(c.resolveCursor(null)).toBe(0);
+    expect(c.resolveCursor({ agent: 'unknown', seq: 0 })).toBeNull();
+    expect(() => c.cursorAt(99)).toThrow(RangeError);
   });
 });

@@ -4,8 +4,11 @@
   "type": "module",
   "packageManager": "pnpm@11.0.9",
   "scripts": {
+    "start": "docker compose up -d --wait && pnpm -r build && pnpm --filter @tandem/sync-server start",
+    "dev": "docker compose up -d --wait && pnpm --parallel --filter @tandem/sync-server --filter @tandem/web dev",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "e2e": "pnpm --filter @tandem/web e2e"
   }
 }

@@ -7,3 +7,6 @@ __pycache__/
 target/
 .next/
 dist/
+dev-dist/
+test-results/
+playwright-report/
