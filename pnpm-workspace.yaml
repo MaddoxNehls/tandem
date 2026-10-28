@@ -3,3 +3,7 @@ packages:
   - "apps/*"
 allowBuilds:
   esbuild: true
+  # Node-only dependencies of transformers.js; the browser build does not use them.
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false

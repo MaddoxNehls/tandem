@@ -181,6 +181,23 @@ export class FugueText {
     return out;
   }
 
+  /**
+   * Every character ever inserted, in list order, including tombstones
+   * (whose content is no longer stored: `ch` is '' for them).
+   */
+  allChars(): { id: string; ch: string; visible: boolean }[] {
+    const out: { id: string; ch: string; visible: boolean }[] = [];
+    for (let leaf: Leaf | null = this.firstLeaf; leaf; leaf = leaf.next) {
+      for (const s of leaf.items) {
+        const name = this.agentName(s.agent);
+        for (let k = 0; k < s.len; k++) {
+          out.push({ id: `${name}:${s.seq + k}`, ch: s.deleted ? '' : s.content[k]!, visible: !s.deleted });
+        }
+      }
+    }
+    return out;
+  }
+
   /** Internal statistics, used by benchmarks and tests. */
   stats(): { spans: number; leaves: number; depth: number } {
     let spans = 0;

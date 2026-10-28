@@ -88,6 +88,11 @@ encodeOps(ops: Op[], { snapshot? }): Uint8Array      // binary sync message
 decodeOps(bytes: Uint8Array): Op[]
 validateOp(op: unknown): string | null              // structural check for untrusted input (LIMITS)
 
+// Version history (src/history.ts): a version is a prefix of getOps()
+replay(ops: Op[], count?: number): Doc               // the document after the first `count` ops
+diffSince(past: Doc, current: Doc): DiffSegment[]   // 'same' | 'inserted' | 'deleted', from tombstone order, no diff algorithm
+restore(doc: Doc, past: Doc): { deleted, inserted } // reach past's text with NEW ops (history is never rewritten)
+
 interface ChangeEvent {
   origin: 'local' | 'remote'
   ops: Op[]
@@ -408,7 +413,7 @@ agent-id table.
 
 ## 6. Testing
 
-`pnpm test` runs 45 tests: unit tests for the edge cases plus fast-check
+`pnpm test` runs 50 tests: unit tests for the edge cases plus fast-check
 property tests. The run counts are in the test names.
 
 **Network simulator** (`test/helpers.ts`): N replicas (2-5). Messages are

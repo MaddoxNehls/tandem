@@ -5,10 +5,15 @@ edits apply instantly, survive being offline, and merge without conflicts when
 you reconnect. The merging is done by a **CRDT written from scratch**
 ([`packages/crdt`](packages/crdt/README.md)), not a library.
 
-Status: milestones 1-3 of the [spec](docs/spec.md) are done (CRDT core,
-editor with local persistence and offline support, sync server with
-presence and share links). On-device semantic search, version history and
-deployment are next.
+Status: milestones 1-4 of the [spec](docs/spec.md) and the version-history
+part of milestone 5 are done:
+- CRDT core;
+- editor with local persistence and offline support;
+- sync server with presence and share links;
+- on-device semantic search;
+- version history with restore.
+
+Deployment is next.
 
 ![Ada's view: Basil's cursor and selection on "shoes", his name in the header](docs/screenshots/collaboration-ada.png)
 
@@ -16,9 +21,12 @@ deployment are next.
 |---|---|---|
 | ![Editor](docs/screenshots/editor.png) | ![Basil's view](docs/screenshots/collaboration-basil.png) | ![Offline](docs/screenshots/offline.png) |
 
-The screenshots are taken by the Playwright end-to-end test
-(`apps/web/e2e/collaboration.spec.ts`) while two browser contexts edit the
-same page.
+| Search by meaning (on-device model) | Related notes | Version history: diff and restore |
+|---|---|---|
+| ![Search palette](docs/screenshots/search.png) | ![Related notes](docs/screenshots/related.png) | ![History](docs/screenshots/history.png) |
+
+All screenshots are taken by the Playwright end-to-end tests
+(`apps/web/e2e/`) in real browser contexts.
 
 ## Run it
 
@@ -190,15 +198,93 @@ the other's version vector lacks.
   follow the snapshot, a new snapshot is written and the covered rows are
   deleted ("snapshot on load").
 
+### On-device semantic search (`apps/web/src/search`)
+
+Nothing about your notes leaves the device. The UI says so in the search
+palette, and the only network traffic is the one-time model download.
+
+- **Model.** `Xenova/all-MiniLM-L6-v2`, 8-bit quantized (~23 MB), runs in
+  a Web Worker with transformers.js (ONNX Runtime Web, WASM). The weights
+  come from the Hugging Face CDN once and are cached by the browser. A
+  Workbox cache-first rule also keeps the model and runtime available
+  offline, and the e2e test reloads with the network off and still gets
+  results by meaning.
+- **Chunks.** One per paragraph, heading or list item (markers stripped,
+  long paragraphs split at sentences), plus the title. They are
+  *content-addressed*: the vector for a chunk is stored in IndexedDB under
+  `model:hash(text)`. After an edit, only lines whose text changed are
+  embedded; moving a paragraph or reloading costs nothing. Unused vectors
+  are pruned.
+- **Re-indexing.** It follows every doc change, local or from a
+  collaborator. It is debounced (1.2 s) with a max wait (3.6 s), so a page
+  that never stops changing is still indexed.
+- **Ranking.** Each page's semantic score is its best chunk's cosine
+  similarity to the query, rescaled. Its keyword score is the coverage of
+  query terms (title 1.0, body 0.6, last term as a prefix for
+  search-as-you-type). `score = 0.6·semantic + 0.4·keyword`. Pages found
+  by meaning alone must clear a minimum similarity. Until the model is
+  ready, search is keyword-only and says so.
+- **Related notes.** Pages are compared paragraph by paragraph: each chunk
+  is matched with its nearest chunk on the other page, averaged both ways.
+  The first version averaged each page into one vector, which ranked a
+  packing list as equally close to "Garage" and to "Summer plans"; matching
+  at chunk level fixed that.
+- **Ctrl/Cmd-K** opens the palette, which blends both kinds of results and
+  labels each one ("Similar meaning", "Matching words", "Words and
+  meaning").
+- **Automated browsers** don't download the model unless asked
+  (`localStorage['tandem.semantic'] = 'on'`), so ordinary e2e tests stay
+  hermetic.
+
+### Version history (`packages/crdt/src/history.ts`)
+
+- **A version is a prefix of the doc's op log.** The log is in causal
+  order, so every prefix is a real past state, and `replay(ops, n)`
+  rebuilds it. The slider steps through runs of edits by the same person,
+  named via an `author:<agent>` entry each session writes into the root
+  doc's map.
+- **The diff needs no diff algorithm.** Fugue never reorders characters,
+  and the current doc still holds every character ever typed (deleted ones
+  as tombstones) in one final order. Walking it and asking of each id "was
+  it visible then? is it visible now?" gives exact insert and delete
+  segments.
+- **Restore never rewrites history.** It applies that diff in reverse as
+  new ops: delete what was added since, re-insert what was removed. It
+  syncs like any edit, and edits made concurrently merge normally. A
+  property test checks that two peers converge after a restore with
+  concurrent edits, and the e2e test restores in one browser and checks
+  the other.
+
+### Lessons
+
+- **Stale selections.** Every bug the end-to-end tests found was about one
+  thing: the browser's DOM selection runs ahead of ProseMirror's state.
+  ProseMirror only reads a click or an End/Ctrl+End key from the async
+  `selectionchange` event. Anything that acts on `state.selection` in
+  between writes the *stale* selection back, so text lands where the caret
+  used to be, sometimes at the start of the document:
+  - a remote transaction;
+  - a presence redraw;
+  - a key command (Enter) pressed right after End.
+
+  The fix is the same each time: flush the DOM selection into the state
+  first (`syncFromDom` before remote and presence dispatches, and
+  `withDomSelection` around key commands). Remote carets moved to an
+  overlay layer for a related reason: non-editable inline widgets broke
+  the browser's own caret movement. Unit tests can't see this class of bug;
+  only real-browser tests with two live contexts did.
+- **Debounce needs a max wait.** A plain debounce never fires while a
+  collaborator types continuously.
+
 ## Tests
 
 | Suite | What it proves | Count |
 |---|---|---|
-| `packages/crdt` | Convergence under drops, duplicates, reordering and partitions (400 runs); idempotence and commutativity (300 + 300); no interleaving (500); **agreement with a paper-faithful FugueMax on every step (1,000)**; tree acyclicity and convergence (400); encoding round-trips; validation; cursor refs | 45 tests |
+| `packages/crdt` | Convergence under drops, duplicates, reordering and partitions (400 runs); idempotence and commutativity (300 + 300); no interleaving (500); **agreement with a paper-faithful FugueMax on every step (1,000)**; tree acyclicity and convergence (400); encoding round-trips; validation; cursor refs; **history: diff reassembles both versions, restore yields the past text with new ops only, restore converges across two peers with concurrent edits (200 runs each)** | 50 tests |
 | `packages/sync` | Frame encoding, doc-id parsing, version-vector comparison | 4 tests |
-| `apps/web` (unit) | Binding: offset ⇄ position round-trips (200 runs), random PM edits → CRDT text equal (300 runs), random remote patches → PM text equal (300 runs), PM → CRDT → CRDT → PM round trip, selection mapping cases; IndexedDB reload and snapshot compaction (fake-indexeddb) | 14 tests |
+| `apps/web` (unit) | Binding: offset ⇄ position round-trips (200 runs), random PM edits → CRDT text equal (300 runs), random remote patches → PM text equal (300 runs), PM → CRDT → CRDT → PM round trip, selection mapping cases; IndexedDB reload and snapshot compaction (fake-indexeddb). Search with a deterministic fake embedder: chunking, re-embedding only changed lines, reuse of persisted vectors, pruning, debounce and max wait, finding by meaning without shared words, keyword fallback, blended ranking, related notes | 26 tests |
 | `apps/sync` (integration) | 3 real `SyncClient`s over WebSockets + Postgres, 250 random edits, one client offline then reconnecting; all replicas equal the server; a late joiner catches up; a *second server* loads the same text from Postgres. View-only tokens can't write (raw forged ops rejected). Bad tokens, foreign agents, garbage bytes and non-character references are rejected. Presence relay. Snapshot-on-load compaction | 5 tests |
-| `apps/web` e2e (Playwright) | Two browser contexts: live text, cursors and selections both ways; one context goes offline, both keep writing, reconnect → converged (DOM equals CRDT on each side); offline reload restores from IndexedDB via the service worker. A view link is read-only. Dragging a page into its own subpage is refused with a toast | 3 tests |
+| `apps/web` e2e (Playwright) | Two browser contexts: live text, cursors and selections both ways; one context goes offline, both keep writing, reconnect → converged (DOM equals CRDT on each side); offline reload restores from IndexedDB via the service worker. A view link is read-only. Dragging a page into its own subpage is refused with a toast. History: browse, diff, restore in one browser, converged in the other, old versions still there. Search: keyword results and the privacy note without the model; **with the real model in the browser**: a query with no shared words finds the right page, related notes, then offline reload and search by meaning still works (skipped when `CI` is set because it downloads the model) | 6 tests |
 
 ## Not done yet
 
@@ -216,4 +302,11 @@ the other's version vector lacks.
   doesn't work on touch screens. The trash has no restore UI yet.
 - **Server rooms live in one process.** Horizontal scaling would need
   sticky routing by document or a shared pub/sub.
-- Milestones 4-5 (on-device semantic search, version history, deployment).
+- **Search.** Indexing runs on the main thread's schedule, but embedding is
+  in a worker. Very large notebooks would want the vectors in a typed
+  array index rather than a `Map`. Titles of pages in the trash are not
+  searchable, by design.
+- **History** is per page body. Title and tree changes aren't on the
+  timeline. Steps have no wall-clock times (ops don't carry them) and are
+  labelled by version number and author.
+- **Deployment** (milestone 5) is not done.

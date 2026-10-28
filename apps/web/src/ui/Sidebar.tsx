@@ -11,11 +11,12 @@ interface SidebarProps {
   user: PeerUser;
   onRename: (name: string) => void;
   onClose: () => void;
+  onSearch: () => void;
 }
 
 const DRAG_TYPE = 'application/x-tandem-page';
 
-export function Sidebar({ ws, current, onOpen, user, onRename, onClose }: SidebarProps) {
+export function Sidebar({ ws, current, onOpen, user, onRename, onClose, onSearch }: SidebarProps) {
   const toast = useToast();
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
@@ -101,6 +102,11 @@ export function Sidebar({ ws, current, onOpen, user, onRename, onClose }: Sideba
           ×
         </button>
       </div>
+
+      <button className="search-btn" onClick={onSearch}>
+        <span>Search</span>
+        <kbd>{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</kbd>
+      </button>
 
       <div className={`tree-root${dropTarget === ROOT ? ' is-drop' : ''}`} {...dropProps(ROOT)}>
         {renderNodes(ws.tree())}

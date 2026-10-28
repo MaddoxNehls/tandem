@@ -4,6 +4,8 @@ import { loadUser, saveUser } from './lib/identity.js';
 import type { Workspace } from './lib/workspace.js';
 import { PageView } from './ui/PageView.js';
 import { Sidebar } from './ui/Sidebar.js';
+import { SearchService } from './search/service.js';
+import { SearchPalette } from './ui/SearchPalette.js';
 import { ToastProvider } from './ui/Toasts.js';
 
 export function App({ ws }: { ws: Workspace }) {
@@ -14,6 +16,32 @@ export function App({ ws }: { ws: Workspace }) {
   const [pageId, setPageId] = useState<string | null>(() => parseRoute().pageId);
   const [user, setUser] = useState(loadUser);
   const [navOpen, setNavOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [search] = useState(() => new SearchService(ws));
+
+  // On-device search. The model (~23 MB) downloads once and is cached by the
+  // browser. Automated browsers skip the download unless asked to.
+  useEffect(() => {
+    let pref: string | null = null;
+    try {
+      pref = localStorage.getItem('tandem.semantic');
+    } catch {
+      /* ignore */
+    }
+    (window as unknown as { tandemSearch: unknown }).tandemSearch = search; // e2e tests
+    void search.start({ loadModel: pref === 'on' || (pref !== 'off' && !navigator.webdriver) });
+  }, [search]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Follow the URL.
   useEffect(() => {
@@ -61,10 +89,10 @@ export function App({ ws }: { ws: Workspace }) {
   return (
     <ToastProvider>
       <div className={`app${navOpen ? ' nav-open' : ''}`}>
-        <Sidebar ws={ws} current={current} onOpen={open} user={user} onRename={rename} onClose={() => setNavOpen(false)} />
+        <Sidebar ws={ws} current={current} onOpen={open} user={user} onRename={rename} onClose={() => setNavOpen(false)} onSearch={() => setPaletteOpen(true)} />
         <main className="sheet">
           {current && ws.page(current) ? (
-            <PageView key={current} ws={ws} pageId={current} onOpenNav={() => setNavOpen(true)} />
+            <PageView key={current} ws={ws} pageId={current} search={search} onOpen={open} onOpenNav={() => setNavOpen(true)} />
           ) : (
             <div className="empty">
               <p>This notebook has no pages yet.</p>
@@ -77,6 +105,7 @@ export function App({ ws }: { ws: Workspace }) {
           )}
         </main>
       </div>
+      {paletteOpen && <SearchPalette ws={ws} search={search} onOpen={open} onClose={() => setPaletteOpen(false)} />}
     </ToastProvider>
   );
 }

@@ -15,6 +15,9 @@ export default defineConfig({
     },
   },
   build: { target: 'es2022', sourcemap: true },
+  worker: { format: 'es' },
+  // transformers.js ships prebuilt bundles; don't let the dev optimizer touch them.
+  optimizeDeps: { exclude: ['@huggingface/transformers'] },
   plugins: [
     react(),
     VitePWA({
@@ -36,6 +39,20 @@ export default defineConfig({
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//, /^\/sync/],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        // The search model and ONNX runtime are fetched on first use and
+        // then served from cache, so semantic search works offline too.
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) =>
+              url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'huggingface.co' || url.hostname.endsWith('.hf.co'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'tandem-model',
+              expiration: { maxEntries: 40 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
       },
     }),
   ],

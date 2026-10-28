@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Editor } from '../editor/Editor.js';
 import type { Workspace } from '../lib/workspace.js';
+import type { SearchService } from '../search/service.js';
+import { HistoryPanel } from './HistoryPanel.js';
+import { RelatedNotes } from './SearchPalette.js';
 import { ShareButton } from './ShareButton.js';
 import { StatusPill } from './StatusPill.js';
 
@@ -8,9 +11,12 @@ interface PageViewProps {
   ws: Workspace;
   pageId: string;
   onOpenNav: () => void;
+  search: SearchService;
+  onOpen: (pageId: string) => void;
 }
 
-export function PageView({ ws, pageId, onOpenNav }: PageViewProps) {
+export function PageView({ ws, pageId, onOpenNav, search, onOpen }: PageViewProps) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const doc = ws.page(pageId)!;
   const readOnly = ws.readOnly;
   const title = ws.title(pageId);
@@ -37,6 +43,9 @@ export function PageView({ ws, pageId, onOpenNav }: PageViewProps) {
         </button>
         <StatusPill ws={ws} />
         <div className="topbar-end">
+          <button className="btn ghost" aria-pressed={historyOpen} onClick={() => setHistoryOpen((o) => !o)}>
+            History
+          </button>
           {peers.length > 0 && (
             <ul className="peers" aria-label="Also here">
               {peers.map((p) => (
@@ -73,7 +82,11 @@ export function PageView({ ws, pageId, onOpenNav }: PageViewProps) {
             }
           }}
         />
-        <Editor doc={doc} readOnly={readOnly} peers={peers} onSelection={onSelection} autoFocus={title !== ''} />
+        {historyOpen && <HistoryPanel ws={ws} pageId={pageId} onClose={() => setHistoryOpen(false)} />}
+        <div hidden={historyOpen}>
+          <Editor doc={doc} readOnly={readOnly} peers={peers} onSelection={onSelection} autoFocus={title !== ''} />
+          <RelatedNotes search={search} pageId={pageId} onOpen={onOpen} />
+        </div>
       </article>
     </>
   );

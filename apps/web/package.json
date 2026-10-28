@@ -14,6 +14,7 @@
   "dependencies": {
     "@fontsource-variable/newsreader": "5.3.0",
     "@fontsource-variable/schibsted-grotesk": "5.3.0",
+    "@huggingface/transformers": "3.8.1",
     "@tandem/crdt": "workspace:*",
     "@tandem/sync": "workspace:*",
     "prosemirror-commands": "1.7.2",

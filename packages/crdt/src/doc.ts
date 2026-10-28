@@ -214,6 +214,11 @@ export class Doc {
     return this.textCrdt.visibleIds();
   }
 
+  /** All characters in list order, including deleted ones (`ch` '' for those). */
+  allChars(): { id: string; ch: string; visible: boolean }[] {
+    return this.textCrdt.allChars();
+  }
+
   // ---------------------------------------------------------------------------
   // Metadata (LWW map)
   // ---------------------------------------------------------------------------

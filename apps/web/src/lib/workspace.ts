@@ -183,6 +183,7 @@ export class Workspace {
 
   setUser(user: PeerUser): void {
     this.user = user;
+    if (this.authorRecorded) this.root.setMeta(`author:${this.agents.current}`, { name: user.name, color: user.color });
     // Re-handshake so collaborators see the new name.
     if (this.client) {
       this.client.disconnect();
@@ -281,8 +282,37 @@ export class Workspace {
 
   private track(docId: string, doc: Doc, rows: number): void {
     this.persisters.push(new DocPersister(this.store, docId, doc, rows));
+    const pageId = docId === this.id ? null : this.pageIdOf(docId);
     doc.on('change', (e) => {
       if (e.origin === 'local' && this.channel) this.channel.postMessage({ docId, bytes: encodeOps(e.ops) });
+      if (e.origin === 'local' && pageId) this.recordAuthor();
+      for (const fn of this.docListeners) fn(pageId);
     });
+  }
+
+  // --- change feed and authorship -------------------------------------------
+
+  private readonly docListeners = new Set<(pageId: string | null) => void>();
+  private authorRecorded = false;
+
+  /** Called after any doc changes: a page id, or null for the root doc (tree, titles). */
+  onDocChange(fn: (pageId: string | null) => void): () => void {
+    this.docListeners.add(fn);
+    return () => this.docListeners.delete(fn);
+  }
+
+  /** Name and ink of whoever wrote with `agent` (recorded in the root doc's map). */
+  author(agent: string): PeerUser | null {
+    const a = this.root.getMeta(`author:${agent}`);
+    return a && typeof a === 'object' && !Array.isArray(a) && typeof a.name === 'string' && typeof a.color === 'string'
+      ? { name: a.name, color: a.color }
+      : null;
+  }
+
+  /** Once per session, on the first edit: map this session's agent id to the user. */
+  private recordAuthor(): void {
+    if (this.authorRecorded || this.readOnly) return;
+    this.authorRecorded = true;
+    this.root.setMeta(`author:${this.agents.current}`, { name: this.user.name, color: this.user.color });
   }
 }

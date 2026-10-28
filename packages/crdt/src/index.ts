@@ -17,3 +17,5 @@ export type {
   VersionVector,
 } from './ops.js';
 export type { TextPatch } from './text.js';
+export { diffSince, replay, restore } from './history.js';
+export type { DiffSegment } from './history.js';
